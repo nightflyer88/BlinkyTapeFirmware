@@ -7,20 +7,17 @@ const uint16_t MAX_LEDS = 512;       // Maximum number of LEDs that can be contr
 
 #define BUTTON_PATTERN_SWITCH_TIME    1000   // Time to hold the button down to switch patterns
 
-#define LED_OUT       13
+#define LED_OUT       13            // BlinkyTape
+//#define LED_OUT       6            // Arduino pro Micro
 #define BUTTON_IN     10
 #define ANALOG_INPUT  A9            // Pin RC-Channel
 #define EXTRA_PIN_A    7
 #define EXTRA_PIN_B   11
 
-#define RCsupported              // comment to disable RC support
-#define buttonSupported          // comment to disable button support
 
 #define maxPulseLenght        1900       // [us] @Servoposition +100% 
 #define minPulseLenght        1100       // [us] @Servoposition -100%
 
-#define TimeoutFrequency      27000       // Timeout [us] signal frequency
-#define TimeoutPulseLenght     2500      // Timeout [us] pulse length
 
 
 /*

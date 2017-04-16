@@ -1,32 +1,27 @@
-/*
- * BlinkyTapeRC 
- * V1.0
- *
-
-Erweiterte BlinkyTape Firmware für RC Modelle.
-Die Firmware unterstütz ein normales PWM Servosignal, und sollte mit jedem RC-Hersteller kompatibel sein.
-
-
-Releasnotes:
-
-V1.0     15.01.17
-- PWM Servosignal wird unterstütz
-- Framedelay optimiert
-
-
-
-Original Sketch von Blinkinlabs:
-
 // Pattern Player Sketch
 // Designed to work with PatternPaint and the BlinkyTape controller
 //
 // Tested with the following software:
-// Arduino 1.6.12 (https://www.arduino.cc/en/Main/Software)
+// Arduino 1.8.1 (https://www.arduino.cc/en/Main/Software)
 // FastLED 3.1.3 (https://github.com/FastLED/FastLED/releases/tag/v3.1.3)
 // BlinkyTape 2.1.0 (https://github.com/Blinkinlabs/BlinkyTape_Arduino/releases/tag/2.1.0)
 
-*/
+// Releasnotes:
+/*
+   V1.1.1   15.04.17
+   - signal processing bug fixed 
+   
+   V1.1     08.03.17
+   - PWM signal read optimized (with interrupt)
+   - Firmware size reduced
+   - Button is no longer supported
+   - set brightness with Pattern Paint is no longer supported
+   
+   V1.0     15.01.17
+   - PWM signal from an RC receiver is supported
+   - Framedelay optimized
 
+*/
 
 
 #include <animation.h>
@@ -55,14 +50,14 @@ Original Sketch von Blinkinlabs:
 #define FRAME_DELAY_OFFSET      5    // Frame delay (2 bytes)
 
 // RC signal
-#ifdef RCsupported
-bool patternChanged = false;
+bool RCread = false;
 bool RCavailable = false;
-const int TimeoutFrequency_COUNTS = TimeoutFrequency / 4.19;
-const int TimeoutPulseLenght_COUNTS = TimeoutPulseLenght / 4.19;
-const int maxPulseLenght_COUNTS = maxPulseLenght / 4.19;
-const int minPulseLenght_COUNTS = minPulseLenght  / 4.19;
-#endif
+bool signalRisingEdge = false;
+bool patternChanged = false;
+uint16_t pulsLenghtCount;
+const int maxPulseLenghtCounts = maxPulseLenght / 7.85;
+const int minPulseLenghtCounts = minPulseLenght  / 7.85;
+const int centerPulseLenghtCounts = (maxPulseLenghtCounts-minPulseLenghtCounts)/2;
 
 // LED data array
 struct CRGB leds[MAX_LEDS];   // Space to hold the current LED data
@@ -75,24 +70,13 @@ Animation pattern;            // Current pattern
 
 uint16_t ledCount;            // Number of LEDs used in the current sketch
 
-const uint8_t brightnessCount = 8;
-uint8_t brightnesSteps[brightnessCount];
+uint8_t lastBrightness = 10;  // If no rc signal is present after the boot process, this brightness is used
 
-uint8_t currentBrightness;
-uint8_t lastBrightness;
-
-// Button interrupt variables and Interrupt Service Routine
-#ifdef buttonSupported 
-bool buttonDebounced;
-uint16_t buttonCounter;
-const uint16_t BUTTON_PATTERN_SWITCH_COUNTS = BUTTON_PATTERN_SWITCH_TIME / 1.42;
-#endif
 
 #define EEPROM_START_ADDRESS  0
 #define EEPROM_MAGIG_BYTE_0   0x12
 #define EEPROM_MAGIC_BYTE_1   0x34
 #define PATTERN_EEPROM_ADDRESS EEPROM_START_ADDRESS + 2
-#define BRIGHTNESS_EEPROM_ADDRESS EEPROM_START_ADDRESS + 3
 
 // Read the pattern data from the end of the program memory, and construct a new Pattern from it.
 void setPattern(uint8_t newPattern) {
@@ -117,89 +101,90 @@ void setPattern(uint8_t newPattern) {
   pattern.init(frameCount, frameData, encodingType, ledCount, frameDelay);
 }
 
-void setBrightness(uint8_t newBrightness) {
-  currentBrightness = newBrightness % brightnessCount;
-
-  if (EEPROM.read(BRIGHTNESS_EEPROM_ADDRESS) != currentBrightness) {
-    EEPROM.write(BRIGHTNESS_EEPROM_ADDRESS, currentBrightness);
-  }
-
-  LEDS.setBrightness(brightnesSteps[currentBrightness]);
-}
-
-void changePattern(){
-  // first unroll the brightness!
-  setBrightness(lastBrightness);
-  setPattern(currentPattern + 1);
-}
-
 
 ISR(PCINT0_vect) {
-  // check if pwm signal available
-  #ifdef RCsupported
-  uint8_t pwmState = !(PINB & (1 << PINB5)); // Reading state of the PB5
-  if (!pwmState) { // at rising edge
-    RCavailable = true;
-  }
-  #endif
-
-  #ifdef buttonSupported
-  // Called when the button is both pressed and released.
-  uint8_t buttonState = !(PINB & (1 << PINB6)); // Reading state of the PB6 (remember that HIGH == released)
-  if (buttonState) {
-    if (buttonDebounced == false) {
-      buttonDebounced = true;
-      // if the button pressed once, then change the brightness
-      lastBrightness = currentBrightness;
-      setBrightness(currentBrightness + 1);
-
-      // And configure and start timer4 interrupt.
-      TCCR4B = 0x06; // prescaler: 32
-      TCNT4 = 0;  // Reset the counter
+  // if ready to read rc signal
+  if(RCread){
+    uint8_t pwmState = !(PINB & (1 << PINB5)); // Reading state of the PB5
+    
+    if (!pwmState) { // at rising edge
+      signalRisingEdge = true;
+      // rc signal is available
+      RCavailable = true;
+      // Configure and start timer4 interrupt.
+      TCNT4 = 0x00;  // Reset the counter
+      TCCR4B = 0x08; // prescaler: 128
       TIMSK4 = _BV(TOV4);  // turn on the interrupt
-      // reset overflow counter
-      buttonCounter = 0;
+    
+    }else{
+
+      // stop timer4
+      TCCR4B = 0x00; // prescaler: 0 
+      TIMSK4 = 0;  // turn off the interrupt
+      
+      if(RCavailable && signalRisingEdge){
+        signalRisingEdge = false;
+        // check if rc signal has any change
+        if(TCNT4 > pulsLenghtCount+1 || TCNT4 < pulsLenghtCount-1){
+          
+          // read RC Signal
+          pulsLenghtCount = TCNT4;
+          int rcValue = int(pulsLenghtCount - minPulseLenghtCounts-centerPulseLenghtCounts)*100/centerPulseLenghtCounts;          
+          //Serial.println(rcValue);
+          
+          if (rcValue < min_off_pos) {
+            // change pattern
+            if (patternChanged == false) {
+              LEDS.setBrightness(lastBrightness);
+              setPattern(currentPattern + 1);
+              patternChanged = true;
+            }
+
+          } else if (rcValue > max_off_pos) {
+            // run
+            patternChanged = false;
+            LEDS.setBrightness(rcValue);
+            lastBrightness = rcValue;
+
+          } else {
+            // stop
+            patternChanged = false;
+            LEDS.setBrightness(0);
+          }
+          
+        }
+        
+      }
+      
     }
-  }
-  else {
-    buttonDebounced = false;
+    
+  }else{
     TIMSK4 = 0;  // turn off the interrupt
   }
-  #endif
+  
 }
 
 
-// This is called every 1.42 ms while the button is being held down
-#ifdef buttonSupported
 ISR(TIMER4_OVF_vect) {
-  // If we've waited long enough, switch the pattern
-  ++buttonCounter;
-  if (buttonCounter == BUTTON_PATTERN_SWITCH_COUNTS) {
-    changePattern();
-    // reset overflow counter
-    buttonCounter = 0;
+  // if timer overflow, no rc signal available
+  if(RCread){
+      RCavailable = false; 
   }
+  TIMSK4 = 0;  // turn off the interrupt
 }
-#endif
+
 
 
 void setup()
 {
   Serial.begin(57600);
 
-  pinMode(BUTTON_IN, INPUT_PULLUP);
-  #ifdef pwmSupported
+  // RC signal
   pinMode(ANALOG_INPUT, INPUT_PULLUP);
-  #endif
 
   // Interrupt set-up; see Atmega32u4 datasheet section 11
   PCIFR  |= (1 << PCIF0);  // Just in case, clear interrupt flag
-  #ifdef buttonSupported
-  PCMSK0 |= (1 << PCINT6); // Set interrupt mask to the button pin (PCINT6)
-  #endif
-  #ifdef RCsupported
   PCMSK0 |= (1 << PCINT5); // Set interrupt mask to the analog pin (PCINT5)
-  #endif
   PCICR  |= (1 << PCIE0);  // Enable interrupt
 
   // setup Timer1 for frame delay
@@ -210,11 +195,6 @@ void setup()
   // First, load the pattern count and LED geometry from the pattern table
   patternCount = pgm_read_byte(PATTERN_TABLE_ADDRESS + PATTERN_COUNT_OFFSET);
   ledCount     = pgm_read_word(PATTERN_TABLE_ADDRESS + LED_COUNT_OFFSET);
-
-  // Next, read the brightness table.
-  for (uint8_t i = 0; i < brightnessCount; i++) {
-    brightnesSteps[i] = pgm_read_byte(PATTERN_TABLE_ADDRESS + BRIGHTNESS_OFFSET + i);
-  }
 
   // Bounds check for the LED count
   // Note that if this is out of bounds,the patterns will be displayed incorrectly.
@@ -228,16 +208,13 @@ void setup()
     EEPROM.write(EEPROM_START_ADDRESS, EEPROM_MAGIG_BYTE_0);
     EEPROM.write(EEPROM_START_ADDRESS + 1, EEPROM_MAGIC_BYTE_1);
     EEPROM.write(PATTERN_EEPROM_ADDRESS, 0);
-    EEPROM.write(BRIGHTNESS_EEPROM_ADDRESS, 0);
   }
 
-  // Read in the last-used pattern and brightness
+  // Read in the last-used pattern
   currentPattern = EEPROM.read(PATTERN_EEPROM_ADDRESS);
-  currentBrightness = EEPROM.read(BRIGHTNESS_EEPROM_ADDRESS);
 
   // Now, read the first pattern from the table
   setPattern(currentPattern);
-  setBrightness(currentBrightness);
 
   controller = &(LEDS.addLeds<WS2811, LED_OUT, GRB>(leds, ledCount));
   LEDS.show();
@@ -248,83 +225,33 @@ void setup()
 
 void loop()
 {
-
+    
   // load timer1 for frame delay
   TCNT1 = 65535 - pattern.getFrameDelay() * 63;
   TIFR1 = 0x01; //reset overflow flag
+
+  // disable rc signal read, when draw pattern 
+  noInterrupts();
+  RCread = false;
+  signalRisingEdge = false;
+  interrupts();
+
+  // draw pattern
+  pattern.draw(leds);
 
   // If'n we get some data, switch to passthrough mode
   if (Serial.available() > 0) {
     serialLoop(leds);
   }
+  
+  // enable rc signal read 
+  noInterrupts();
+  RCread = true;
+  interrupts();
 
-  // RC signal
-  #ifdef RCsupported
-  if (RCavailable == true) {
-
-    // get pulse
-    
-    noInterrupts();
-    // first sync with signal
-    int rcPulse = 0;
-    bool PulseEdge;
-    bool lastPulseEdge = digitalRead(ANALOG_INPUT);  
-    // wait for rising edge  
-    while(rcPulse<TimeoutFrequency_COUNTS){
-      PulseEdge = digitalRead(ANALOG_INPUT);
-      if(PulseEdge != lastPulseEdge){
-        if(PulseEdge==HIGH){
-          break;
-        }
-      }
-      lastPulseEdge = PulseEdge;
-      rcPulse++;
-    }
-
-    // then measure pulse length
-    rcPulse = 0;
-    while(digitalRead(ANALOG_INPUT)==HIGH){
-      rcPulse++;
-      __asm__("nop\n\t""nop\n\t""nop\n\t""nop\n\t""nop\n\t""nop\n\t""nop\n\t""nop\n\t""nop\n\t");
-      if(rcPulse>TimeoutPulseLenght_COUNTS){
-        rcPulse = 0;
-        break;
-      }
-    }
-    interrupts();
-
-    if (rcPulse == 0) {
-      RCavailable = false;
-      setBrightness(currentBrightness);
-      goto rcTimeOut;
-    }
-
-    // pwm to %
-    rcPulse = rcPulse - minPulseLenght_COUNTS - 100;
-
-    if (rcPulse < min_off_pos) {
-      // change pattern
-      if (patternChanged == false) {
-        changePattern();
-        patternChanged = true;
-      }
-
-    } else if (rcPulse > max_off_pos) {
-      // run
-      patternChanged = false;
-      LEDS.setBrightness(rcPulse);
-
-    } else {
-      // stop
-      patternChanged = false;
-      LEDS.setBrightness(0);
-    }
+  if (!RCavailable) {
+    LEDS.setBrightness(lastBrightness);
   }
-  rcTimeOut:
-  #endif
-
-  // draw pattern
-  pattern.draw(leds);
 
   // wait until timer1 overflow flag is set
   while (!(TIFR1 & 1)) {
