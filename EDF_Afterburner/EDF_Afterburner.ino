@@ -5,13 +5,16 @@
  
  Original Projekt von: http://www.mostfun.de/index.php/modellbau/flugzeuge-blogansicht/314-edf-afterburner2
 
- Je nach Anwendung müssen die #define Einstellungen angepasst werden. Grundeinstellung ist für 
- BlinkyTape Board mit 60 LED.
+ Je nach Anwendung müssen die #define Einstellungen angepasst werden. Es werden 60 LED unterstützt, 
+ das LED Signal wird an Pin D13 und D6 ausgegeben. 
 
  Für die Fehlersuche die serielle Textausgabe mit einem Terminal verwenden (9600baud). 
  Unter Arduino: Werkzeuge > Serieller Monitor wählen 
 
 Releas Notes:
+
+ V1.2     16.04.17
+ - LED Pin für Arduino pro Micro definiert
 
  V1.1     04.02.17
  - LED Anzahl von 24 auf 60 angepasst
@@ -27,7 +30,8 @@ Releas Notes:
 // ********* Einstellungen ***************
 
 // NeoPixels LED 
-#define LED_Pin        13         // LED Data Pin
+#define LED_Pin1       13         // BlinkyTape
+#define LED_Pin2       6          // Arduino pro Micro
 #define PIXELS         60         // Anzahl LED 
 
 
@@ -92,7 +96,8 @@ uint32_t tPulse; //Pulslänge
 
 
 
-Adafruit_NeoPixel pixels = Adafruit_NeoPixel(PIXELS, LED_Pin , NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels1 = Adafruit_NeoPixel(PIXELS, LED_Pin1 , NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels2 = Adafruit_NeoPixel(PIXELS, LED_Pin2 , NEO_GRB + NEO_KHZ800);
 
 void setup() {
   
@@ -109,7 +114,8 @@ void setup() {
   PcInt::attachInterrupt(RC_Pin, PWMIRQ, CHANGE);
 
   // Setup LED
-  pixels.begin();
+  pixels1.begin();
+  pixels2.begin();
   randomSeed(tPulse);
 }
 
@@ -128,21 +134,24 @@ void loop() {
       blue = 0;
       printColor();      
       for(int i=0;i<PIXELS;i++){
-        pixels.setPixelColor(i, pixels.Color(red,green,blue)); 
+        pixels1.setPixelColor(i, pixels1.Color(red,green,blue)); 
+        pixels2.setPixelColor(i, pixels2.Color(red,green,blue));
       }
     }else if (throttleValue<Pos2){
       //Red comes
       red=uint8_t(throttleValue-Pos1)*(256/(Pos2-Pos1));
       printColor(); 
       for(int i=0;i<PIXELS;i++){
-        pixels.setPixelColor(i, pixels.Color(red,random(0,red/8),random(0,red/8))); 
+        pixels1.setPixelColor(i, pixels1.Color(red,random(0,red/8),random(0,red/8)));
+        pixels2.setPixelColor(i, pixels2.Color(red,random(0,red/8),random(0,red/8)));  
       }
     }else if (throttleValue<Pos3){
       //red goes to orange
       green=uint8_t((throttleValue-Pos2)*(70/(Pos3-Pos2)));
       printColor(); 
       for(int i=0;i<PIXELS;i++){
-        pixels.setPixelColor(i, pixels.Color(255,green,random(0,green/2))); 
+        pixels1.setPixelColor(i, pixels1.Color(255,green,random(0,green/2)));
+        pixels2.setPixelColor(i, pixels2.Color(255,green,random(0,green/2))); 
       }
     }else if (throttleValue<Pos4){
       //orange goes to blue
@@ -150,7 +159,8 @@ void loop() {
       blue=uint8_t((throttleValue-Pos3)*(256/(Pos4-Pos3)));
       printColor(); 
       for(int i=0;i<PIXELS;i++){
-        pixels.setPixelColor(i, pixels.Color(random(128,255),green,blue));
+        pixels1.setPixelColor(i, pixels1.Color(random(128,255),green,blue));
+        pixels2.setPixelColor(i, pixels2.Color(random(128,255),green,blue));
       }
     }else{
       //max
@@ -159,10 +169,12 @@ void loop() {
       blue = 255;
       printColor();      
       for(int i=0;i<PIXELS;i++){
-        pixels.setPixelColor(i, pixels.Color(red,green,blue)); 
+        pixels1.setPixelColor(i, pixels1.Color(red,green,blue));
+        pixels2.setPixelColor(i, pixels2.Color(red,green,blue)); 
       }
     }
-    pixels.show(); // This sends the updated pixel color to the hardware.
+    pixels1.show(); // This sends the updated pixel color to the hardware.
+    pixels2.show(); // This sends the updated pixel color to the hardware.
     
 
   // Wait before next reading
